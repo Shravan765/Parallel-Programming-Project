@@ -1,0 +1,29 @@
+Paper References & Links
+1. Parallel Merge Sort
+Cole gives a parallel implementation of merge sort on a CREW PRAM that uses n processors and O(log n) time.cs.cmu
+
+Richard Cole, "Parallel Merge Sort," SIAM J. Comput., Vol. 17, No. 4, pp. 770–785, August 1988.
+DOI: http://dx.doi.org/10.1137/0217049
+PDF: cs.cmu
+ACM DL: https://dl.acm.org/doi/10.1137/0217049[[2]](grafiati)
+
+
+2. Parallel Quick Sort
+In 1991 David M W Powers described a parallelized quicksort that can operate in O(log n) time on a CRCW PRAM with n processors by performing partitioning implicitly.en.wikipedia The partitioning step is accomplished through the use of a parallel prefix sum algorithm to compute an index for each array element.
+
+D.M.W. Powers, "Parallelized QuickSort and RadixSort with Optimal Speedup," Proc. Int. Conf. on Parallel Computing Technologies, 1991.
+ResearchGate: https://www.researchgate.net/publication/2928615_Parallelized_QuickSort_with_Optimal_Speedup[[4]](en.wikipedia)
+
+
+3. Parallel Odd-Even Transposition Sort
+This algorithm was originally presented by Habermann in 1972. The algorithm extends efficiently to the case of multiple items per processor. In the Baudet–Stevenson odd–even merge-splitting algorithm, each processor sorts its own sublist at each step, using any efficient sort algorithm, and then performs a merge splitting, or transposition–merge, operation with its neighbor.en.wikipedia
+
+A.N. Habermann, "Parallel Neighbor Sort (or the Glory of the Induction Principle)," CMU Computer Science Report, August 1972.
+
+Available as Technical report AD-759 248, National Technical Information Service, US Department of Commerce.
+Referenced in:Academic Dictionarie... A. N. Habermann, "Parallel neighbor sort," Carnegie-Mellon University Comput. Sci. Dep. Rep., Aug. 1972.https://dl.acm.org/d...
+G. Baudet & D. Stevenson, "Optimal Sorting Algorithms for Parallel Computers," IEEE Trans. Comput., vol. C-27, pp. 84–87, Jan. 1978.
+
+G. Baudet and D. Stevenson, "Optimal sorting algorithms for parallel computers," IEEE Trans. Comput., vol. C-27, pp. 84-87, Jan. 1978.
+ACM/IEEE DL: https://dl.acm.org/d...
+Semantic Scholar: https://www.semanticscholar.org/paper/178e4164eebbce9e484668a2544b6dc95cee297a
