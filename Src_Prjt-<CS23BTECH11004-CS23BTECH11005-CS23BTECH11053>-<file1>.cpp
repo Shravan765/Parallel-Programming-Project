@@ -4,14 +4,10 @@
 //
 // 1. Parallel Merge Sort with binary-search-based parallel merge
 //    Reference: R. Cole, "Parallel Merge Sort," SIAM J. Comput., 17(4), pp.770-785, 1988.
-//    Key idea: The merge step itself is parallelized by using binary search to split
-//    the merge into independent sub-merges (Cole's core contribution).
 //
 // 2. Parallel Quick Sort with cooperative multi-thread partitioning
 //    Reference: D.M.W. Powers, "Parallelized QuickSort and RadixSort with Optimal Speedup,"
 //    Proc. Int. Conf. on Parallel Computing Technologies, 1991.
-//    Key idea: The partition step is parallelized — multiple threads cooperate to classify
-//    and rearrange elements around the pivot simultaneously (performing partitioning implicitly).
 //
 // 3. Parallel Odd-Even Transposition Sort with merge-splitting
 //    References:
@@ -19,8 +15,6 @@
 //        CMU Computer Science Report, Aug. 1972.
 //      - G. Baudet & D. Stevenson, "Optimal Sorting Algorithms for Parallel Computers,"
 //        IEEE Trans. Comput., vol. C-27, pp.84-87, Jan. 1978.
-//    Key idea: Each processor holds a sublist, sorts locally, then performs merge-split
-//    operations with neighbors in alternating odd/even phases (Baudet-Stevenson extension).
 //
 // Compile: g++ -std=c++17 -pthread -O2 -o parallel_sorts parallel_sorts.cpp
 // Run:     ./parallel_sorts <num_elements> <num_threads> <log_flag(0/1)>
@@ -74,37 +68,61 @@ bool is_sorted_check(const std::vector<int>& arr) {
     return true;
 }
 
+// ★ NEW: Compare two arrays element-by-element, return mismatch info
+struct MatchResult {
+    bool matches;
+    size_t first_mismatch_idx;
+    int expected_val;
+    int actual_val;
+    size_t total_mismatches;
+};
+
+MatchResult compare_with_reference(const std::vector<int>& result,
+                                   const std::vector<int>& reference) {
+    MatchResult mr;
+    mr.matches = true;
+    mr.first_mismatch_idx = 0;
+    mr.expected_val = 0;
+    mr.actual_val = 0;
+    mr.total_mismatches = 0;
+
+    if (result.size() != reference.size()) {
+        mr.matches = false;
+        mr.first_mismatch_idx = 0;
+        mr.total_mismatches = std::max(result.size(), reference.size());
+        return mr;
+    }
+
+    bool first_found = false;
+    for (size_t i = 0; i < result.size(); i++) {
+        if (result[i] != reference[i]) {
+            mr.total_mismatches++;
+            if (!first_found) {
+                mr.first_mismatch_idx = i;
+                mr.expected_val = reference[i];
+                mr.actual_val = result[i];
+                first_found = true;
+            }
+        }
+    }
+
+    mr.matches = (mr.total_mismatches == 0);
+    return mr;
+}
+
 // ====================================================
 // 1. PARALLEL MERGE SORT
-//    Cole-inspired: binary-search-based parallel merge
-//    
-//    The key insight from Cole (1988) is that the MERGE
-//    step itself must be parallelized. We use binary search
-//    to find the rank of the median of one sorted half in
-//    the other, splitting the merge into two independent
-//    sub-merges that can proceed in parallel.
-//
-//    This is the practical shared-memory adaptation of
-//    Cole's CREW PRAM approach using rank-based splitting.
 // ====================================================
 namespace ParallelMergeSort {
 
     static const int SEQ_THRESHOLD = 2000;
 
-    // ---- Parallel Merge (Cole's core idea) ----
-    // Merges two sorted regions src[la..ra] and src[lb..rb]
-    // into dst starting at index lc.
-    //
-    // Strategy: pick the median of the larger half, binary-search
-    // for its rank in the smaller half. This yields two independent
-    // sub-merge problems that can be solved in parallel.
     void parallel_merge(const std::vector<int>& src, std::vector<int>& dst,
                         int la, int ra, int lb, int rb, int lc,
                         int depth, int max_merge_depth, int tid) {
         int na = ra - la + 1;
         int nb = rb - lb + 1;
 
-        // Base cases: one or both ranges empty
         if (na <= 0 && nb <= 0) return;
         if (na <= 0) {
             std::copy(src.begin() + lb, src.begin() + rb + 1, dst.begin() + lc);
@@ -115,7 +133,6 @@ namespace ParallelMergeSort {
             return;
         }
 
-        // Base case: fall back to sequential merge
         if (depth >= max_merge_depth || (na + nb) < SEQ_THRESHOLD) {
             log_msg(tid, "MergeSort",
                     "Sequential merge: [" + std::to_string(la) + ".." +
@@ -131,7 +148,6 @@ namespace ParallelMergeSort {
             return;
         }
 
-        // Ensure range A is the LARGER range (swap if needed)
         int ala = la, ara = ra, alb = lb, arb = rb;
         if (na < nb) {
             std::swap(ala, alb);
@@ -139,16 +155,11 @@ namespace ParallelMergeSort {
             std::swap(na, nb);
         }
 
-        // Pick median of larger range A
         int mid_a = ala + na / 2;
-
-        // Binary search: find position in range B where src[mid_a] would be inserted
-        // This is the rank-based splitting from Cole's approach
         int mid_b = static_cast<int>(
             std::upper_bound(src.begin() + alb, src.begin() + arb + 1, src[mid_a])
             - src.begin());
 
-        // Compute destination position for the median element
         int mid_c = lc + (mid_a - ala) + (mid_b - alb);
         dst[mid_c] = src[mid_a];
 
@@ -158,9 +169,6 @@ namespace ParallelMergeSort {
                 ", rank in B at " + std::to_string(mid_b) +
                 " → dst[" + std::to_string(mid_c) + "]");
 
-        // LEFT sub-merge:  A[ala..mid_a-1]  +  B[alb..mid_b-1]  → dst[lc..mid_c-1]
-        // RIGHT sub-merge: A[mid_a+1..ara]  +  B[mid_b..arb]    → dst[mid_c+1..]
-        // These are INDEPENDENT — can run in parallel (Cole's key contribution)
         std::thread left_thread(parallel_merge, std::cref(src), std::ref(dst),
                                 ala, mid_a - 1, alb, mid_b - 1, lc,
                                 depth + 1, max_merge_depth, tid * 2 + 1);
@@ -172,14 +180,11 @@ namespace ParallelMergeSort {
         left_thread.join();
     }
 
-    // ---- Parallel Merge Sort (recursive) ----
-    // Uses fork-join for the recursive sort AND parallel merge for combining.
     void p_merge_sort(std::vector<int>& arr, std::vector<int>& temp,
                       int left, int right,
                       int depth, int max_sort_depth, int max_merge_depth, int tid) {
         if (left >= right) return;
 
-        // Below threshold or max depth: use optimized sequential sort
         if (depth >= max_sort_depth || (right - left) < SEQ_THRESHOLD) {
             log_msg(tid, "MergeSort",
                     "Sequential sort [" + std::to_string(left) + ".." +
@@ -195,7 +200,6 @@ namespace ParallelMergeSort {
                 "Fork-sort [" + std::to_string(left) + ".." +
                 std::to_string(right) + "], split at " + std::to_string(mid));
 
-        // Fork: sort left and right halves in parallel
         std::thread left_thread(p_merge_sort, std::ref(arr), std::ref(temp),
                                 left, mid,
                                 depth + 1, max_sort_depth, max_merge_depth,
@@ -207,10 +211,6 @@ namespace ParallelMergeSort {
 
         left_thread.join();
 
-        // ---- PARALLEL MERGE (Cole's contribution) ----
-        // Merge depth decreases at deeper sort levels to control thread count.
-        // At sort depth d, merge gets max_merge_depth - d levels of parallelism.
-        // This bounds total concurrent threads to ~2^max_merge_depth.
         int merge_depth = std::max(0, max_merge_depth - depth);
 
         log_msg(tid, "MergeSort",
@@ -221,12 +221,10 @@ namespace ParallelMergeSort {
         parallel_merge(arr, temp, left, mid, mid + 1, right, left,
                        0, merge_depth, tid);
 
-        // Copy merged result back from temp to arr
         std::copy(temp.begin() + left, temp.begin() + right + 1,
                   arr.begin() + left);
     }
 
-    // ---- Entry point ----
     void sort(std::vector<int>& arr, int num_threads) {
         std::vector<int> temp(arr.size());
         int max_sort_depth = std::max(1, static_cast<int>(std::log2(num_threads)));
@@ -247,46 +245,23 @@ namespace ParallelMergeSort {
 
 // ====================================================
 // 2. PARALLEL QUICKSORT
-//    Powers-inspired: cooperative multi-thread partitioning
-//
-//    The key insight from Powers (1991) is that the PARTITION
-//    step itself must be parallelized — multiple processors
-//    cooperate to classify elements relative to the pivot
-//    simultaneously ("performing partitioning implicitly").
-//
-//    We implement this as a 3-phase parallel partition:
-//      Phase 1: Each thread counts elements ≤ pivot in its chunk
-//      Phase 2: Prefix sum to compute global write offsets
-//      Phase 3: Each thread scatters its elements to correct positions
-//
-//    This is the practical shared-memory adaptation of Powers'
-//    CRCW PRAM implicit partitioning using parallel prefix sums.
 // ====================================================
 namespace ParallelQuickSort {
 
     static const int SEQ_THRESHOLD = 2000;
 
-    // ---- Parallel Partition (Powers' core idea) ----
-    // Multiple threads cooperate to partition arr[low..high] around a pivot.
-    // Returns the final index of the pivot element.
-    //
-    // Phase 1: Each thread counts elements ≤ pivot in its chunk (parallel classification)
-    // Phase 2: Prefix sum over counts to determine global write positions
-    // Phase 3: Each thread scatters its classified elements to computed positions
     int parallel_partition(std::vector<int>& arr, std::vector<int>& temp,
                            int low, int high, int num_part_threads, int tid) {
         int n = high - low + 1;
 
-        // Median-of-three pivot selection
         int mid_idx = low + (high - low) / 2;
         if (arr[mid_idx] < arr[low]) std::swap(arr[low], arr[mid_idx]);
         if (arr[high] < arr[low]) std::swap(arr[low], arr[high]);
         if (arr[mid_idx] < arr[high]) std::swap(arr[mid_idx], arr[high]);
         int pivot = arr[high];
 
-        int data_n = n - 1; // elements to partition (excluding pivot at arr[high])
+        int data_n = n - 1;
 
-        // Fall back to sequential for small inputs or single thread
         if (num_part_threads <= 1 || data_n < SEQ_THRESHOLD) {
             log_msg(tid, "QuickSort",
                     "Sequential partition [" + std::to_string(low) + ".." +
@@ -310,10 +285,6 @@ namespace ParallelQuickSort {
                 std::to_string(high) + "], pivot=" + std::to_string(pivot) +
                 ", using " + std::to_string(nt) + " partition threads");
 
-        // ---- Phase 1: Parallel classification (count) ----
-        // Each thread counts how many elements in its chunk are ≤ pivot
-        // This is the "implicit partitioning" from Powers — each processor
-        // independently determines the classification of its elements.
         std::vector<int> less_count(nt, 0);
         std::vector<std::thread> threads;
 
@@ -333,10 +304,6 @@ namespace ParallelQuickSort {
 
         log_msg(tid, "QuickSort", "Phase 1 complete: counts computed");
 
-        // ---- Phase 2: Prefix sum (sequential — O(num_threads), negligible) ----
-        // Compute write offsets for each thread's ≤pivot and >pivot elements
-        // This mirrors the parallel prefix sum from Powers' PRAM model,
-        // done sequentially here since nt is small (≤ num_threads).
         std::vector<int> less_offset(nt, 0);
         std::vector<int> greater_offset(nt, 0);
         int total_less = 0;
@@ -361,10 +328,6 @@ namespace ParallelQuickSort {
                 " (less=" + std::to_string(total_less) +
                 ", greater=" + std::to_string(total_greater) + ")");
 
-        // ---- Phase 3: Parallel scatter ----
-        // Each thread writes its elements to the globally correct positions
-        // in the temp buffer. Elements ≤ pivot go to [low..pivot_pos-1],
-        // elements > pivot go to [pivot_pos+1..high].
         for (int t = 0; t < nt; t++) {
             int start = low + t * chunk;
             int end = (t == nt - 1) ? high - 1 : low + (t + 1) * chunk - 1;
@@ -383,10 +346,8 @@ namespace ParallelQuickSort {
         }
         for (auto& th : threads) th.join();
 
-        // Place pivot at its final position
         temp[pivot_pos] = pivot;
 
-        // Copy partitioned result back to arr
         std::copy(temp.begin() + low, temp.begin() + high + 1, arr.begin() + low);
 
         log_msg(tid, "QuickSort",
@@ -396,13 +357,11 @@ namespace ParallelQuickSort {
         return pivot_pos;
     }
 
-    // ---- Parallel Quick Sort (recursive) ----
     void p_quicksort(std::vector<int>& arr, std::vector<int>& temp,
                      int low, int high,
                      int depth, int max_depth, int num_threads, int tid) {
         if (low >= high) return;
 
-        // Below threshold or max depth: use optimized sequential sort
         if (depth >= max_depth || (high - low) < SEQ_THRESHOLD) {
             log_msg(tid, "QuickSort",
                     "Sequential sort [" + std::to_string(low) + ".." +
@@ -412,9 +371,6 @@ namespace ParallelQuickSort {
             return;
         }
 
-        // Threads available for partition at this recursion depth.
-        // At depth d, we have 2^d concurrent quicksort calls,
-        // so each gets num_threads / 2^d threads for its partition.
         int part_threads = std::max(1, num_threads / (1 << depth));
 
         int pi = parallel_partition(arr, temp, low, high, part_threads, tid);
@@ -424,7 +380,6 @@ namespace ParallelQuickSort {
                 ": left=[" + std::to_string(low) + ".." + std::to_string(pi - 1) +
                 "], right=[" + std::to_string(pi + 1) + ".." + std::to_string(high) + "]");
 
-        // Fork: sort left and right partitions in parallel
         std::thread left_thread(p_quicksort, std::ref(arr), std::ref(temp),
                                 low, pi - 1,
                                 depth + 1, max_depth, num_threads,
@@ -437,7 +392,6 @@ namespace ParallelQuickSort {
         left_thread.join();
     }
 
-    // ---- Entry point ----
     void sort(std::vector<int>& arr, int num_threads) {
         std::vector<int> temp(arr.size());
         int max_depth = std::max(1, static_cast<int>(std::log2(num_threads))) + 1;
@@ -456,24 +410,9 @@ namespace ParallelQuickSort {
 
 // ====================================================
 // 3. PARALLEL ODD-EVEN TRANSPOSITION SORT
-//    Baudet-Stevenson extension of Habermann (1972)
-//
-//    Original (Habermann 1972): N processors, each holding ONE element,
-//    alternate between odd-phase and even-phase compare-and-swap with neighbors.
-//
-//    Baudet-Stevenson (1978) extension: k processors, each holding n/k elements.
-//    Each processor sorts its own sublist, then performs merge-splitting with
-//    its neighbor: merge the two sublists, give the smaller half to the left
-//    processor and the larger half to the right processor.
-//
-//    After k phases (alternating odd/even), the array is guaranteed sorted.
 // ====================================================
 namespace ParallelOddEvenSort {
 
-    // ---- Merge-Split Operation (Baudet-Stevenson) ----
-    // Given two adjacent sorted blocks, merge them and split so that
-    // the left block retains the smaller half and the right block retains the larger half.
-    // This replaces the single-element compare-and-swap from Habermann's original.
     void merge_split(std::vector<int>& arr, int block_size, int n,
                      int tid_left, int tid_right) {
         int start_left = tid_left * block_size;
@@ -487,7 +426,6 @@ namespace ParallelOddEvenSort {
         int size_right = end_right - start_right;
         int total = size_left + size_right;
 
-        // Merge both sorted blocks into a temporary array
         std::vector<int> merged(total);
         int i = start_left, j = start_right, k = 0;
         while (i < end_left && j < end_right) {
@@ -497,7 +435,6 @@ namespace ParallelOddEvenSort {
         while (i < end_left) merged[k++] = arr[i++];
         while (j < end_right) merged[k++] = arr[j++];
 
-        // Split: left block gets smaller elements, right block gets larger
         for (int p = 0; p < size_left; p++) {
             arr[start_left + p] = merged[p];
         }
@@ -506,7 +443,6 @@ namespace ParallelOddEvenSort {
         }
     }
 
-    // ---- Entry point ----
     void sort(std::vector<int>& arr, int num_threads) {
         int n = arr.size();
         int block_size = (n + num_threads - 1) / num_threads;
@@ -517,8 +453,6 @@ namespace ParallelOddEvenSort {
                 " block_size=" + std::to_string(block_size) +
                 " elements=" + std::to_string(n));
 
-        // ---- Step 1: Each processor sorts its local block ----
-        // (Baudet-Stevenson: "each processor sorts its own sublist")
         {
             std::vector<std::thread> threads;
             for (int t = 0; t < num_threads; t++) {
@@ -535,16 +469,10 @@ namespace ParallelOddEvenSort {
 
         log_msg(0, "OddEvenSort", "Local sorts complete. Beginning transposition phases.");
 
-        // ---- Step 2: Alternate odd/even merge-split phases ----
-        // Habermann (1972) proved that after p phases (where p = num_processors),
-        // the array is guaranteed sorted. Each phase alternates between:
-        //   Even phase: merge-split pairs (0,1), (2,3), (4,5), ...
-        //   Odd phase:  merge-split pairs (1,2), (3,4), (5,6), ...
         for (int phase = 0; phase < num_threads; phase++) {
             std::vector<std::thread> threads;
 
             if (phase % 2 == 0) {
-                // EVEN phase: pairs (0,1), (2,3), (4,5), ...
                 log_msg(0, "OddEvenSort",
                         "Phase " + std::to_string(phase) + " (EVEN)");
                 for (int t = 0; t + 1 < num_threads; t += 2) {
@@ -553,7 +481,6 @@ namespace ParallelOddEvenSort {
                     });
                 }
             } else {
-                // ODD phase: pairs (1,2), (3,4), (5,6), ...
                 log_msg(0, "OddEvenSort",
                         "Phase " + std::to_string(phase) + " (ODD)");
                 for (int t = 1; t + 1 < num_threads; t += 2) {
@@ -580,8 +507,10 @@ namespace ParallelOddEvenSort {
 using SortFunction = std::function<void(std::vector<int>&, int)>;
 
 double benchmark(SortFunction sort_fn, const std::vector<int>& original,
+                 const std::vector<int>& reference_sorted,       // ★ NEW parameter
                  int num_threads, int runs, const std::string& name) {
     double total_time = 0.0;
+    int match_failures = 0;                                      // ★ NEW
 
     for (int r = 0; r < runs; r++) {
         std::vector<int> arr = original; // fresh copy each run
@@ -593,13 +522,33 @@ double benchmark(SortFunction sort_fn, const std::vector<int>& original,
         double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
         total_time += elapsed;
 
+        //Check sorted AND check exact match with std::sort output
         if (!is_sorted_check(arr)) {
             std::cerr << "  *** ERROR: " << name << " run " << r + 1
                       << " produced UNSORTED output! ***\n";
         }
 
+        //  Element-by-element comparison with std::sort reference
+        MatchResult mr = compare_with_reference(arr, reference_sorted);
+        if (!mr.matches) {
+            match_failures++;
+            std::cerr << "  *** MISMATCH: " << name << " run " << r + 1
+                      << " differs from std::sort at index " << mr.first_mismatch_idx
+                      << " (expected " << mr.expected_val
+                      << ", got " << mr.actual_val << ")"
+                      << " [" << mr.total_mismatches << " total mismatches] ***\n";
+        }
+
         log_msg(0, name, "Run " + std::to_string(r + 1) + ": " +
-                std::to_string(elapsed) + " ms");
+                std::to_string(elapsed) + " ms" +
+                (mr.matches ? " [MATCH OK]" : " [MISMATCH]"));    // ★ MODIFIED
+    }
+
+    // 
+    if (match_failures == 0) {
+        std::cout << " ✓ all " << runs << " runs match std::sort.";
+    } else {
+        std::cout << " ✗ " << match_failures << "/" << runs << " runs MISMATCHED std::sort!";
     }
 
     return total_time / runs;
@@ -656,10 +605,14 @@ int main(int argc, char* argv[]) {
     std::cout << "    1. Parallel Merge Sort    [Cole 1988 — parallel merge]\n";
     std::cout << "    2. Parallel Quick Sort    [Powers 1991 — parallel partition]\n";
     std::cout << "    3. Odd-Even Trans. Sort   [Habermann 1972 / Baudet-Stevenson 1978]\n";
-    std::cout << "    4. std::sort (sequential baseline)\n";
+    std::cout << "    4. std::sort (sequential baseline + correctness reference)\n";  // ★ MODIFIED
     std::cout << "========================================================\n\n";
 
     std::vector<int> original = generate_random_array(num_elements, seed);
+
+    //Generate the reference sorted array ONCE for correctness checks
+    std::vector<int> reference_sorted = original;
+    std::sort(reference_sorted.begin(), reference_sorted.end());
 
     // --- Benchmark 0: Sequential std::sort (baseline) ---
     std::cout << "[1/4] Benchmarking std::sort (sequential baseline)..." << std::flush;
@@ -673,9 +626,11 @@ int main(int argc, char* argv[]) {
             double elapsed = std::chrono::duration<double, std::milli>(end - start).count();
             avg_stdsort += elapsed;
 
-            if (!is_sorted_check(arr)) {
+            // verify std::sort against the reference (sanity check)
+            MatchResult mr = compare_with_reference(arr, reference_sorted);
+            if (!mr.matches) {
                 std::cerr << "  *** ERROR: std::sort run " << r + 1
-                          << " produced UNSORTED output! ***\n";
+                          << " differs from reference! ***\n";
             }
 
             log_msg(0, "std::sort", "Run " + std::to_string(r + 1) + ": " +
@@ -683,23 +638,26 @@ int main(int argc, char* argv[]) {
         }
         avg_stdsort /= NUM_RUNS;
     }
-    std::cout << " done.\n";
+    std::cout << " done. ✓ (reference)\n"; 
 
     // --- Benchmark 1: Parallel Merge Sort ---
     std::cout << "[2/4] Benchmarking Parallel Merge Sort (Cole)..." << std::flush;
     double avg_merge = benchmark(ParallelMergeSort::sort, original,
+                                  reference_sorted,                  // ★ NEW arg
                                   num_threads, NUM_RUNS, "MergeSort");
     std::cout << " done.\n";
 
     // --- Benchmark 2: Parallel Quick Sort ---
     std::cout << "[3/4] Benchmarking Parallel Quick Sort (Powers)..." << std::flush;
     double avg_quick = benchmark(ParallelQuickSort::sort, original,
+                                  reference_sorted,                  // ★ NEW arg
                                   num_threads, NUM_RUNS, "QuickSort");
     std::cout << " done.\n";
 
     // --- Benchmark 3: Parallel Odd-Even Transposition Sort ---
     std::cout << "[4/4] Benchmarking Parallel Odd-Even Trans. Sort (Baudet-Stevenson)..." << std::flush;
     double avg_oddeven = benchmark(ParallelOddEvenSort::sort, original,
+                                    reference_sorted,                // ★ NEW arg
                                     num_threads, NUM_RUNS, "OddEvenSort");
     std::cout << " done.\n";
 
